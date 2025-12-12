@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LinkedIn Outreach Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            zinc: {
+              950: '#09090b',
+              900: '#18181b',
+              800: '#27272a',
+              700: '#3f3f46',
+              600: '#52525b',
+              500: '#71717a',
+              400: '#a1a1aa',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .animate-spin {
+      animation: spin 1s linear infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .animate-pulse {
+      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+  </style>
+</head>
+<body class="bg-zinc-950 min-h-screen">
+  <div id="app"></div>
+
+  <script>
+    const SHEET_CSV = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRF3vWcWywzJetU95fJ1uJwTqiv46n8zRDR5ZX5t8n8Oh-YhDHaLj5W7MbTDC93VGphzzHs3rfdFxFj/pub?gid=0&single=true&output=csv';
+
+    // Get start of current week (Monday)
+    function getWeekStart() {
+      const now = new Date();
+      const day = now.getDay();
+      const diff = now.getDate() - day + (day === 0 ? -6 : 1);
+      const monday = new Date(now);
+      monday.setDate(diff);
+      monday.setHours(0, 0, 0, 0);
+      return monday;
+    }
+
+    // Get start of today
+    function getTodayStart() {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return today;
+    }
+
+    // Parse date
+    function parseDate(dateStr) {
+      if (!dateStr) return null;
+      try {
+        const date = new Date(dateStr);
+        if (!isNaN(date.getTime())) return date;
+        return null;
+      } catch {
+        return null;
+      }
+    }
+
+    // State
+    let data = {
+      sent: 0,
+      replied: 0,
+      todayActivity: 0,
+      sentThisWeek: 0,
+      queueDepth: 0,
+      lastUpdated: null
+    };
+    let isRefreshing = false;
+    let error = null;
+    let initialLoad = true;
+
+    // Fetch data
+    async function fetchData() {
+      isRefreshing = true;
+      error = null;
+      render();
+      
+      try {
+        const response = await fetch(SHEET_CSV);
+        if (!response.ok) throw new Error('Failed to fetch sheet');
+        
+        const text = await response.text();
+        
+        // Use Papa Parse for proper CSV parsing
+        const parsed = Papa.parse(text, {
+          header: true,
+          skipEmptyLines: true,
+          transformHeader: (header) => header.trim().toLowerCase()
+        });
+        
+        const rows = parsed.data;
+        
+        const weekStart = getWeekStart();
+        const todayStart = getTodayStart();
+        
+        let sent = 0;
+        let replied = 0;
+        let todayActivity = 0;
+        let sentThisWeek = 0;
+        let queueDepth = 0;
+        
+        rows.forEach(row => {
+          // Get sent status
+          const sentValue = row['sent?'] || row['sent'] || '';
+          const isSent = String(sentValue).toUpperCase() === 'TRUE';
+          
+          // Get replied status
+          const repliedValue = row['replied?'] || row['replied'] || '';
+          const isReplied = String(repliedValue).toUpperCase() === 'TRUE';
+          
+          // Get sent date
+          const sentDate = parseDate(row['sentdate']);
+          
+          // Count metrics
+          if (isSent) {
+            sent++;
+            
+            if (sentDate) {
+              if (sentDate >= todayStart) {
+                todayActivity++;
+              }
+              if (sentDate >= weekStart) {
+                sentThisWeek++;
+              }
+            }
+          } else {
+            // Not sent = in queue (only count rows that have a LinkedIn URL)
+            const linkedinUrl = row['linkedin url'] || row['linkedinurl'] || '';
+            if (linkedinUrl.trim()) {
+              queueDepth++;
+            }
+          }
+          
+          if (isReplied) {
+            replied++;
+          }
+        });
+        
+        data = {
+          sent,
+          replied,
+          todayActivity,
+          sentThisWeek,
+          queueDepth,
+          lastUpdated: new Date().toLocaleTimeString()
+        };
+        
+        initialLoad = false;
+      } catch (err) {
+        console.error('Error fetching sheet:', err);
+        error = err.message;
+        initialLoad = false;
+      } finally {
+        isRefreshing = false;
+        render();
+      }
+    }
+
+    // Render
+    function render() {
+      const responseRate = data.sent > 0 ? ((data.replied / data.sent) * 100).toFixed(1) : '0.0';
+      const weekStartFormatted = getWeekStart().toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+
+      if (initialLoad) {
+        document.getElementById('app').innerHTML = `
+          <div class="min-h-screen bg-zinc-950 text-white flex items-center justify-center">
+            <div class="text-center">
+              <div class="w-8 h-8 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+              <p class="text-zinc-500">Loading dashboard...</p>
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      document.getElementById('app').innerHTML = `
+        <div class="min-h-screen bg-zinc-950 text-white p-8">
+          <div class="max-w-6xl mx-auto">
+            <!-- Header -->
+            <div class="flex items-center justify-between mb-8">
+              <div>
+                <h1 class="text-2xl font-bold text-white">LinkedIn Outreach</h1>
+                <p class="text-zinc-500 text-sm mt-1">InMail Campaign Dashboard</p>
+              </div>
+              <div class="flex items-center gap-4">
+                <div class="flex items-center gap-2 text-sm ${isRefreshing ? 'text-emerald-400' : 'text-zinc-500'}">
+                  <div class="w-2 h-2 rounded-full ${isRefreshing ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-600'}"></div>
+                  ${isRefreshing ? 'Updating...' : `Last updated ${data.lastUpdated}`}
+                </div>
+                <div class="px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
+                  <span class="text-emerald-400 text-sm font-medium">● Live</span>
+                </div>
+              </div>
+            </div>
+
+            ${error ? `
+              <div class="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
+                Error loading data: ${error}
+              </div>
+            ` : ''}
+
+            <!-- Main Metrics -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <div class="bg-zinc-900 rounded-2xl p-6 border border-zinc-800 hover:border-zinc-700 transition-all duration-300">
+                <p class="text-zinc-500 text-sm font-medium uppercase tracking-wider mb-2">Sent</p>
+                <p class="text-4xl font-bold text-white">${data.sent.toLocaleString()}</p>
+                <p class="text-zinc-600 text-sm mt-2">Total InMails sent</p>
+              </div>
+              <div class="bg-zinc-900 rounded-2xl p-6 border border-zinc-800 hover:border-zinc-700 transition-all duration-300">
+                <p class="text-zinc-500 text-sm font-medium uppercase tracking-wider mb-2">Replied</p>
+                <p class="text-4xl font-bold text-white">${data.replied.toLocaleString()}</p>
+                <p class="text-zinc-600 text-sm mt-2">Responses received</p>
+              </div>
+              <div class="bg-zinc-900 rounded-2xl p-6 border border-zinc-800 hover:border-zinc-700 transition-all duration-300">
+                <p class="text-zinc-500 text-sm font-medium uppercase tracking-wider mb-2">Response Rate</p>
+                <p class="text-4xl font-bold ${parseFloat(responseRate) >= 40 ? 'text-emerald-400' : 'text-white'}">${responseRate}%</p>
+                <p class="text-zinc-600 text-sm mt-2">${parseFloat(responseRate) >= 40 ? 'Above target' : 'Below 40% target'}</p>
+              </div>
+            </div>
+
+            <!-- Secondary Metrics -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+              <div class="bg-zinc-900 rounded-2xl p-6 border border-zinc-800">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="text-zinc-500 text-sm font-medium uppercase tracking-wider mb-2">Today's Activity</p>
+                    <p class="text-4xl font-bold text-white">${data.todayActivity}</p>
+                    <p class="text-zinc-600 text-sm mt-2">InMails sent today</p>
+                  </div>
+                  <div class="w-16 h-16 bg-blue-500/10 rounded-2xl flex items-center justify-center">
+                    <svg class="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-zinc-900 rounded-2xl p-6 border border-zinc-800">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="text-zinc-500 text-sm font-medium uppercase tracking-wider mb-2">Sent This Week</p>
+                    <p class="text-4xl font-bold text-white">${data.sentThisWeek}</p>
+                    <p class="text-zinc-600 text-sm mt-2">Since ${weekStartFormatted}</p>
+                  </div>
+                  <div class="w-16 h-16 bg-purple-500/10 rounded-2xl flex items-center justify-center">
+                    <svg class="w-8 h-8 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+
+              <div class="bg-zinc-900 rounded-2xl p-6 border border-zinc-800">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <p class="text-zinc-500 text-sm font-medium uppercase tracking-wider mb-2">Queue Depth</p>
+                    <p class="text-4xl font-bold text-white">${data.queueDepth}</p>
+                    <p class="text-zinc-600 text-sm mt-2">Ready to send</p>
+                  </div>
+                  <div class="w-16 h-16 bg-amber-500/10 rounded-2xl flex items-center justify-center">
+                    <svg class="w-8 h-8 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Response Rate Visual -->
+            <div class="bg-zinc-900 rounded-2xl p-6 border border-zinc-800">
+              <p class="text-zinc-500 text-sm font-medium uppercase tracking-wider mb-4">Response Funnel</p>
+              <div class="space-y-4">
+                <div>
+                  <div class="flex justify-between text-sm mb-2">
+                    <span class="text-zinc-400">Sent</span>
+                    <span class="text-white font-medium">${data.sent}</span>
+                  </div>
+                  <div class="h-3 bg-zinc-800 rounded-full overflow-hidden">
+                    <div class="h-full bg-gradient-to-r from-blue-500 to-blue-400 rounded-full" style="width: 100%"></div>
+                  </div>
+                </div>
+                <div>
+                  <div class="flex justify-between text-sm mb-2">
+                    <span class="text-zinc-400">Replied</span>
+                    <span class="text-white font-medium">${data.replied}</span>
+                  </div>
+                  <div class="h-3 bg-zinc-800 rounded-full overflow-hidden">
+                    <div class="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full transition-all duration-500" style="width: ${responseRate}%"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="mt-8 text-center text-zinc-600 text-sm">
+              Auto-refreshes every 30 seconds • Centryx Automations
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Initialize
+    fetchData();
+    setInterval(fetchData, 30000);
+  </script>
+</body>
+</html>
